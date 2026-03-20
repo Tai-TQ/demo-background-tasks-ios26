@@ -12,5 +12,9 @@
 	<array>
 		<string>processing</string>
 	</array>
+	<!-- Required for PHPhotoLibrary.requestAuthorization(for: .addOnly).
+	     Grants write-only access; does NOT request access to the user's existing library. -->
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>This app saves the processed video to your Photos library.</string>
 </dict>
 </plist>
