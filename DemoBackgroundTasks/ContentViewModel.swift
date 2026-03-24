@@ -18,48 +18,48 @@ enum TaskState {
 final class ContentViewModel: ObservableObject {
     @Published var countPercentState: TaskState = .notRunning
     @Published var countPercentComplete: Int = 0
-
+    
     @Published var downloadState: DownloadState = .notStarted
     @Published var downloadProgressPercent: Int = 0
-
+    
     @Published var exportState: ExportState = .notStarted
     @Published var exportProgressPercent: Int = 0
-
+    
     private let downloader = VideoDownloadManager()
     private let exporter   = VideoOverlayExporter()
     private let cancellables: Set<AnyCancellable> = []
-
+    
     init() {
         downloader.progressSubject
             .receive(on: DispatchQueue.main)
             .assign(to: &$downloadProgressPercent)
-
+        
         downloader.stateSubject
             .receive(on: DispatchQueue.main)
             .assign(to: &$downloadState)
-
+        
         exporter.progressSubject
             .receive(on: DispatchQueue.main)
             .assign(to: &$exportProgressPercent)
-
+        
         exporter.stateSubject
             .receive(on: DispatchQueue.main)
             .assign(to: &$exportState)
     }
-
+    
     // MARK: - Download Video
-
+    
     private static let videoURL = URL(string: "https://ia601903.us.archive.org/32/items/BigBuckBunny_328/BigBuckBunny_512kb.mp4")!
-
+    
     func handleDownloadVideo() {
         if downloadState == .downloading {
             downloader.cancel()
             return
         }
-
+        
         let title = "Download Video"
         let taskId = "\(Bundle.main.bundleIdentifier!).download.\(UUID().uuidString)"
-
+        
         // 1. Register – the download is started inside launchHandler so it runs
         //    within the BGContinuedProcessingTask's background execution window.
         NSLog("Start Register \(taskId)")
@@ -69,7 +69,7 @@ final class ContentViewModel: ObservableObject {
             // Delegate all download progress & BGTask lifecycle to the manager.
             self.downloader.start(url: Self.videoURL, bgTask: bgTask)
         }
-
+        
         // 2. Submit
         NSLog("Start Submit \(taskId)")
         let request = BGContinuedProcessingTaskRequest(
@@ -78,7 +78,7 @@ final class ContentViewModel: ObservableObject {
             subtitle: "Downloading..."
         )
         request.strategy = .queue
-
+        
         do {
             try BGTaskScheduler.shared.submit(request)
         } catch {
@@ -86,23 +86,23 @@ final class ContentViewModel: ObservableObject {
             NSLog("Failed to submit download task: \(error)")
         }
     }
-
+    
     // MARK: - Export Video with Overlay
-
+    
     func handleExportVideo() {
         if exportState == .exporting {
             exporter.cancel()
             return
         }
-
+        
         guard FileManager.default.fileExists(atPath: Constants.videoFileUrl.path) else {
             NSLog("No downloaded video found — download the video first")
             return
         }
-
+        
         let title  = "Export Video with Overlay"
         let taskId = "\(Bundle.main.bundleIdentifier!).export.\(UUID().uuidString)"
-
+        
         // 1. Register
         NSLog("Start Register \(taskId)")
         BGTaskScheduler.shared.register(forTaskWithIdentifier: taskId, using: nil) { [weak self] task in
@@ -110,7 +110,7 @@ final class ContentViewModel: ObservableObject {
                   let bgTask = task as? BGContinuedProcessingTask else { return }
             self.exporter.exportProcessedVideo(inputURL: Constants.videoFileUrl, bgTask: bgTask)
         }
-
+        
         // 2. Submit
         NSLog("Start Submit \(taskId)")
         let request = BGContinuedProcessingTaskRequest(
@@ -123,7 +123,7 @@ final class ContentViewModel: ObservableObject {
             NSLog("\(taskId) using GPU")
         }
         request.strategy = .queue
-
+        
         do {
             try BGTaskScheduler.shared.submit(request)
         } catch {
@@ -131,25 +131,25 @@ final class ContentViewModel: ObservableObject {
             NSLog("Failed to submit export task: \(error)")
         }
     }
-
+    
     // MARK: - Processing Task
-
+    
     func handleCountHundredByProcessingTask() {
         if countPercentState == .running { return }
         countPercentState = .running
         let title = "ProcessingTask count 100 seconds"
         let taskId = "\(Bundle.main.bundleIdentifier!).counthundred.\(UUID().uuidString)"
-
+        
         // 1. Register
         NSLog("Start Register \(taskId)")
         BGTaskScheduler.shared.register(forTaskWithIdentifier: taskId, using: nil) { [weak self] task in
             NSLog("Start running launchHandler block")
             guard let self,
                   let task = task as? BGContinuedProcessingTask else { return }
-
+            
             // Flag to prevent calling setTaskCompleted more than once.
             var isCompleted = false
-
+            
             // Per doc section 4: when the user force-quits the app while the task
             // is running, the system calls expirationHandler and the process will
             // be killed very shortly after. We must call setTaskCompleted HERE,
@@ -160,30 +160,30 @@ final class ContentViewModel: ObservableObject {
                 isCompleted = true
                 task?.setTaskCompleted(success: false)
             }
-
+            
             // Update progress.
             let progress = task.progress
             progress.totalUnitCount = 100
             while !progress.isFinished && !isCompleted && self.countPercentState == .running {
                 progress.completedUnitCount += 1
                 let formattedProgress = String(format: "%.2f", progress.fractionCompleted * 100)
-
+                
                 // Update task for displayed progress.
                 task.updateTitle(task.title, subtitle: "Completed \(formattedProgress)%")
-
+                
                 // Update published property so UI re-renders.
                 DispatchQueue.main.async {
                     self.countPercentComplete = Int(progress.completedUnitCount)
                 }
                 sleep(1)
             }
-
+            
             // Only call setTaskCompleted if expirationHandler hasn't already done so.
             if !isCompleted {
                 isCompleted = true
                 task.setTaskCompleted(success: progress.isFinished)
             }
-
+            
             DispatchQueue.main.async {
                 self.countPercentState = .notRunning
                 self.countPercentComplete = 0
@@ -206,4 +206,125 @@ final class ContentViewModel: ObservableObject {
             NSLog("Failed to submit task: \(error)")
         }
     }
+    
+    func testProcessingTaskAfter10s() {
+        let title = "ProcessingTask after 10s"
+        let taskId = "\(Bundle.main.bundleIdentifier!).counthundred.\(UUID().uuidString)"
+        
+        // 1. Register
+        NSLog("Start Register \(taskId)")
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: taskId, using: nil) { task in
+            NSLog("Start running launchHandler block")
+            guard let task = task as? BGContinuedProcessingTask else { return }
+            
+            var isCompleted = false
+            
+            task.expirationHandler = { [weak task] in
+                guard !isCompleted else { return }
+                isCompleted = true
+                task?.setTaskCompleted(success: false)
+            }
+            
+            // Update progress.
+            let progress = task.progress
+            progress.totalUnitCount = 100
+            while !progress.isFinished && !isCompleted {
+                progress.completedUnitCount += 1
+                let formattedProgress = String(format: "%.2f", progress.fractionCompleted * 100)
+                
+                // Update task for displayed progress.
+                task.updateTitle(task.title, subtitle: "Completed \(formattedProgress)%")
+                
+                sleep(1)
+            }
+            
+            // Only call setTaskCompleted if expirationHandler hasn't already done so.
+            if !isCompleted {
+                isCompleted = true
+                task.setTaskCompleted(success: progress.isFinished)
+            }
+        }
+        
+        // 2. Submit
+        NSLog("Start Submit \(taskId)")
+        let request = BGContinuedProcessingTaskRequest(
+            identifier: taskId,
+            title: title,
+            subtitle: "Running..."
+        )
+        request.strategy = .queue
+        
+        do {
+            try BGTaskScheduler.shared.submit(request)
+            NSLog("Submit successfully for task \(taskId)")
+        } catch {
+            NSLog("Failed to submit task: \(error)")
+        }
+    }
+    
+    func testProcessingTaskNoUpdateProcess() {
+        let title = "ProcessingTask No Update Process"
+        let taskId = "\(Bundle.main.bundleIdentifier!).counthundred.\(UUID().uuidString)"
+        
+        // 1. Register
+        NSLog("Start Register \(taskId)")
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: taskId, using: nil) { task in
+            NSLog("Start running launchHandler block")
+            guard let task = task as? BGContinuedProcessingTask else { return }
+            
+            var isCompleted = false
+            var stopUpdateTime: Date? = nil
+            
+            task.expirationHandler = { [weak task] in
+                guard !isCompleted else { return }
+                isCompleted = true
+                if let stopTime = stopUpdateTime {
+                    let elapsed = Date().timeIntervalSince(stopTime)
+                    NSLog("Task cancelled by system %.2f seconds after stopping progress updates", elapsed)
+                }
+                task?.setTaskCompleted(success: false)
+            }
+            
+            // Update progress.
+            let progress = task.progress
+            progress.totalUnitCount = 100
+            while !progress.isFinished && !isCompleted {
+                if progress.completedUnitCount <= 10 {
+                    progress.completedUnitCount += 1
+                    let formattedProgress = String(format: "%.2f", progress.fractionCompleted * 100)
+                    task.updateTitle(task.title, subtitle: "Completed \(formattedProgress)%")
+                } else if progress.completedUnitCount == 11 {
+                    progress.completedUnitCount += 1
+                    // Record the moment we stop updating.
+                    stopUpdateTime = Date()
+                    NSLog("Stopped updating progress at count 10, waiting for system cancellation...")
+                }
+                
+                sleep(1)
+            }
+            
+            // Only call setTaskCompleted if expirationHandler hasn't already done so.
+            if !isCompleted {
+                isCompleted = true
+                task.setTaskCompleted(success: progress.isFinished)
+            }
+        }
+        
+        // 2. Submit
+        NSLog("Start Submit \(taskId)")
+        let request = BGContinuedProcessingTaskRequest(
+            identifier: taskId,
+            title: title,
+            subtitle: "Running..."
+        )
+        request.strategy = .queue
+        
+        do {
+            try BGTaskScheduler.shared.submit(request)
+            NSLog("Submit successfully for task \(taskId)")
+        } catch {
+            NSLog("Failed to submit task: \(error)")
+        }
+    }
+    
 }

@@ -19,9 +19,25 @@ struct ContentView: View {
                 secondView
                 
                 thirdView
+                
+                Button("After 10s on main thread") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+                        viewModel.testProcessingTaskAfter10s()
+                    }
+                }
+                
+                Button("Test No Update Process") {
+                    viewModel.testProcessingTaskNoUpdateProcess()
+                }
             }
             .padding()
             .navigationTitle("Background Tasks")
+//            .onAppear {
+//                DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+//                    NSLog("After 10s on background")
+//                    viewModel.testProcessingTaskAfter10s()
+//                }
+//            }
         }
     }
     
