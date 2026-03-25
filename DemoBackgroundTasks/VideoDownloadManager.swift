@@ -25,6 +25,7 @@ final class VideoDownloadManager: NSObject {
     private var bgTask: BGContinuedProcessingTask?
     private let lock = NSLock()
     private var isBGTaskCompleted = false
+    private var startTime: Date?
 
     private lazy var session = URLSession(
         configuration: .default,
@@ -35,6 +36,8 @@ final class VideoDownloadManager: NSObject {
     /// Start the download. Pass a `BGContinuedProcessingTask` to automatically
     /// bridge download progress → BGTask progress and handle expiration/completion.
     func start(url: URL, bgTask: BGContinuedProcessingTask? = nil) {
+        startTime = Date()
+        NSLog("[Download] Started at %@", ISO8601DateFormatter().string(from: startTime!))
         if let bgTask {
             self.bgTask = bgTask
             self.isBGTaskCompleted = false
@@ -104,6 +107,10 @@ extension VideoDownloadManager: URLSessionDownloadDelegate {
         try? FileManager.default.removeItem(at: dest)
         try? FileManager.default.moveItem(at: location, to: dest)
         progressSubject.send(100)
+        if let start = startTime {
+            let elapsed = Date().timeIntervalSince(start)
+            NSLog("[Download] Completed successfully in %.2f seconds", elapsed)
+        }
         stateSubject.send(.completed)
         completeBGTask(success: true)
     }
@@ -116,6 +123,10 @@ extension VideoDownloadManager: URLSessionDownloadDelegate {
         guard let error else { return }
         let nsError = error as NSError
         guard nsError.code != NSURLErrorCancelled else { return }
+        if let start = startTime {
+            let elapsed = Date().timeIntervalSince(start)
+            NSLog("[Download] Failed after %.2f seconds: %@", elapsed, error.localizedDescription)
+        }
         stateSubject.send(.failed)
         completeBGTask(success: false)
     }

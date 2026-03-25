@@ -29,6 +29,7 @@ final class VideoOverlayExporter: NSObject {
     // Tracks whether cancel() was explicitly called so the export catch-block
     // does not override the .notStarted state already sent by cancel().
     private var exportCancelled = false
+    private var startTime: Date?
 
     // BGTask lifecycle — guarded by a lock so setTaskCompleted is called exactly once
     // regardless of which thread (expirationHandler / export delegate / cancel) fires first.
@@ -59,6 +60,8 @@ final class VideoOverlayExporter: NSObject {
             }
         }
 
+        startTime = Date()
+        NSLog("[Export] Started at %@", ISO8601DateFormatter().string(from: startTime!))
         stateSubject.send(.exporting)
 
         Task {
@@ -124,6 +127,10 @@ final class VideoOverlayExporter: NSObject {
                 try await session.export(to: outputURL, as: .mp4)
                 stopProgressPolling()
                 progressSubject.send(100)
+                if let start = startTime {
+                    let elapsed = Date().timeIntervalSince(start)
+                    NSLog("[Export] Completed successfully in %.2f seconds", elapsed)
+                }
                 await saveToPhotos(url: outputURL)
                 stateSubject.send(.completed)
                 completeBGTask(success: true)
@@ -134,7 +141,12 @@ final class VideoOverlayExporter: NSObject {
                     exportCancelled = false
                     return
                 }
-                NSLog("Export failed: \(error.localizedDescription)")
+                if let start = startTime {
+                    let elapsed = Date().timeIntervalSince(start)
+                    NSLog("[Export] Failed after %.2f seconds: %@", elapsed, error.localizedDescription)
+                } else {
+                    NSLog("Export failed: \(error.localizedDescription)")
+                }
                 stateSubject.send(.failed)
                 completeBGTask(success: false)
             }
