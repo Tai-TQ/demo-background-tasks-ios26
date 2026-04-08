@@ -5,42 +5,26 @@
 //  Created by TaiTQ2 on 19/3/26.
 //
 
-import SwiftUI
 import BackgroundTasks
+import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var viewModel: ContentViewModel = ContentViewModel()
-    
+    @StateObject private var viewModel: ContentViewModel = .init()
+
     var body: some View {
         NavigationView {
             LazyVStack {
                 firstView
 
                 secondView
-                
+
                 thirdView
-                
-                Button("After 10s on main thread") {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
-                        viewModel.testProcessingTaskAfter10s()
-                    }
-                }
-                
-                Button("Test No Update Process") {
-                    viewModel.testProcessingTaskNoUpdateProcess()
-                }
             }
             .padding()
             .navigationTitle("Background Tasks")
-//            .onAppear {
-//                DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
-//                    NSLog("After 10s on background")
-//                    viewModel.testProcessingTaskAfter10s()
-//                }
-//            }
         }
     }
-    
+
     private var firstView: some View {
         VStack {
             Text("ProcessingTask count 100 seconds")
@@ -71,14 +55,14 @@ struct ContentView: View {
         .background(Color.gray.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
-    
+
     private var secondView: some View {
         VStack(spacing: 8) {
             Text("Download Video")
                 .font(.system(size: 18, weight: .semibold))
             HStack {
                 Button {
-                    viewModel.handleDownloadVideo()
+                    handleDownloadVideo()
                 } label: {
                     Text(viewModel.downloadState == .downloading ? "Cancel" : "Start")
                         .foregroundStyle(viewModel.downloadState == .downloading ? .red : .blue)
@@ -112,7 +96,7 @@ struct ContentView: View {
         .background(Color.gray.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
-    
+
     private var thirdView: some View {
         VStack(spacing: 8) {
             Text("Export Video with Overlay")
@@ -153,23 +137,30 @@ struct ContentView: View {
         .background(Color.gray.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
-    
+
     private func handleExportVideo() {
         if viewModel.exportState == .exporting {
-            viewModel.handleExportVideo() // triggers cancel inside ViewModel
+            viewModel.finishExportingVideo()
         } else {
             viewModel.handleExportVideo()
         }
     }
 
+    private func handleDownloadVideo() {
+        if viewModel.downloadState == .downloading {
+            viewModel.finishDownloadingVideo()
+        } else {
+            viewModel.handleDownloadVideo()
+        }
+    }
+
     private func handleCountHundredByProcessingTask() {
         if viewModel.countPercentState == .running {
-            viewModel.countPercentState = .cancelling
+            viewModel.finishCountingTask()
         } else {
             viewModel.handleCountHundredByProcessingTask()
         }
     }
-    
 }
 
 #Preview {
