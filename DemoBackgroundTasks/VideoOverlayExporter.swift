@@ -6,7 +6,6 @@
 //
 
 import AVFoundation
-import BackgroundTasks
 import Combine
 import Photos
 import UIKit
@@ -19,10 +18,9 @@ enum ExportState: Equatable {
 }
 
 final class VideoOverlayExporter: NSObject {
-
     // Subjects for the ViewModel to subscribe to.
     let progressSubject = PassthroughSubject<Int, Never>()
-    let stateSubject    = PassthroughSubject<ExportState, Never>()
+    let stateSubject = PassthroughSubject<ExportState, Never>()
 
     private var exportSession: AVAssetExportSession?
     private var progressTimer: Timer?
@@ -31,34 +29,14 @@ final class VideoOverlayExporter: NSObject {
     private var exportCancelled = false
     private var startTime: Date?
 
-    // BGTask lifecycle — guarded by a lock so setTaskCompleted is called exactly once
-    // regardless of which thread (expirationHandler / export delegate / cancel) fires first.
-    private var bgTask: BGContinuedProcessingTask?
-    private var isBGTaskCompleted = false
-    private let bgTaskLock = NSLock()
-
     // MARK: - Public API
 
-    /// Begins the export pipeline. Call this from inside a BGContinuedProcessingTask
-    /// launchHandler so the work runs in the background execution window.
+    /// Begins the export pipeline.
     ///
     /// - Parameters:
     ///   - inputURL: Local file URL of the source video.
-    ///   - bgTask:   The active BGContinuedProcessingTask, or nil for foreground-only use.
-    func exportProcessedVideo(inputURL: URL, bgTask: BGContinuedProcessingTask? = nil) {
-        self.bgTask = bgTask
-        self.isBGTaskCompleted = false
-        self.exportCancelled = false
-
-        if let bgTask {
-            bgTask.progress.totalUnitCount = 100
-            // expirationHandler must call setTaskCompleted immediately —
-            // the process will be killed very shortly after this block returns.
-            bgTask.expirationHandler = { [weak self] in
-                self?.cancelExportSession()
-                self?.completeBGTask(success: false)
-            }
-        }
+    func exportProcessedVideo(inputURL: URL) {
+        exportCancelled = false
 
         startTime = Date()
         NSLog("[Export] Started at %@", ISO8601DateFormatter().string(from: startTime!))
@@ -73,7 +51,6 @@ final class VideoOverlayExporter: NSObject {
     func cancel() {
         exportCancelled = true
         cancelExportSession()
-        completeBGTask(success: false)
         progressSubject.send(0)
     }
 
@@ -84,15 +61,6 @@ final class VideoOverlayExporter: NSObject {
         exportSession = nil
         stopProgressPolling()
         stateSubject.send(.notStarted)
-    }
-
-    private func completeBGTask(success: Bool) {
-        bgTaskLock.lock()
-        defer { bgTaskLock.unlock() }
-        guard !isBGTaskCompleted else { return }
-        isBGTaskCompleted = true
-        bgTask?.setTaskCompleted(success: success)
-        bgTask = nil
     }
 
     // MARK: - Export pipeline
@@ -113,7 +81,7 @@ final class VideoOverlayExporter: NSObject {
                 presetName: AVAssetExportPresetHighestQuality
             ) else {
                 stateSubject.send(.failed)
-                completeBGTask(success: false)
+
                 return
             }
 
@@ -133,7 +101,6 @@ final class VideoOverlayExporter: NSObject {
                 }
                 await saveToPhotos(url: outputURL)
                 stateSubject.send(.completed)
-                completeBGTask(success: true)
             } catch {
                 stopProgressPolling()
                 // If the user explicitly cancelled, state has already been reset by cancel().
@@ -148,12 +115,10 @@ final class VideoOverlayExporter: NSObject {
                     NSLog("Export failed: \(error.localizedDescription)")
                 }
                 stateSubject.send(.failed)
-                completeBGTask(success: false)
             }
         } catch {
             NSLog("Export pipeline error: \(error)")
             stateSubject.send(.failed)
-            completeBGTask(success: false)
         }
     }
 
@@ -162,7 +127,6 @@ final class VideoOverlayExporter: NSObject {
     private func buildComposition(
         asset: AVURLAsset
     ) async throws -> (AVMutableComposition, AVVideoComposition) {
-
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
         let audioTracks = try await asset.loadTracks(withMediaType: .audio)
 
@@ -175,19 +139,19 @@ final class VideoOverlayExporter: NSObject {
         }
 
         // Load track properties in parallel.
-        async let naturalSizeAsync   = videoTrack.load(.naturalSize)
-        async let transformAsync     = videoTrack.load(.preferredTransform)
-        async let frameRateAsync     = videoTrack.load(.nominalFrameRate)
-        async let durationAsync      = asset.load(.duration)
+        async let naturalSizeAsync = videoTrack.load(.naturalSize)
+        async let transformAsync = videoTrack.load(.preferredTransform)
+        async let frameRateAsync = videoTrack.load(.nominalFrameRate)
+        async let durationAsync = asset.load(.duration)
 
-        let naturalSize        = try await naturalSizeAsync
+        let naturalSize = try await naturalSizeAsync
         let preferredTransform = try await transformAsync
-        let nominalFrameRate   = try await frameRateAsync
-        let duration           = try await durationAsync
+        let nominalFrameRate = try await frameRateAsync
+        let duration = try await durationAsync
 
         let transformedSize = naturalSize.applying(preferredTransform)
         let renderSize = CGSize(
-            width:  abs(transformedSize.width),
+            width: abs(transformedSize.width),
             height: abs(transformedSize.height)
         )
 
@@ -212,39 +176,32 @@ final class VideoOverlayExporter: NSObject {
            let compositionAudioTrack = composition.addMutableTrack(
                withMediaType: .audio,
                preferredTrackID: kCMPersistentTrackID_Invalid
-           ) {
+           )
+        {
             try? compositionAudioTrack.insertTimeRange(fullRange, of: audioTrack, at: .zero)
         }
+//
+        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: compositionVideoTrack)
+        layerInstruction.setTransform(preferredTransform, at: .zero)
 
-        var layerConfig = AVVideoCompositionLayerInstruction.Configuration(
-            trackID: compositionVideoTrack.trackID
-        )
-        layerConfig.setTransform(preferredTransform, at: .zero)
-
-        let layerInstruction = AVVideoCompositionLayerInstruction(configuration: layerConfig)
-        
-        let configuration = AVVideoCompositionInstruction.Configuration(
-            layerInstructions: [layerInstruction],
-            timeRange: fullRange
-        )
-
-        let instruction = AVVideoCompositionInstruction(configuration: configuration)
+        let instruction = AVMutableVideoCompositionInstruction()
+        instruction.timeRange = fullRange
+        instruction.layerInstructions = [layerInstruction]
 
         // --- Core Animation overlay ---
         let (parentLayer, videoLayer) = buildOverlayLayers(renderSize: renderSize)
 
         let safeTimescale = CMTimeScale((nominalFrameRate > 0 ? nominalFrameRate : 30).rounded())
-        var compositionConfig = AVVideoComposition.Configuration()
-        compositionConfig.frameDuration = CMTimeMake(value: 1, timescale: safeTimescale)
-        compositionConfig.renderSize    = renderSize
-        compositionConfig.instructions  = [instruction]
+        let videoComposition = AVMutableVideoComposition()
+        videoComposition.frameDuration = CMTimeMake(value: 1, timescale: safeTimescale)
+        videoComposition.renderSize = renderSize
+        videoComposition.instructions = [instruction]
         // postProcessingAsVideoLayer: composites CA layers on top of every rendered frame.
-        compositionConfig.animationTool = AVVideoCompositionCoreAnimationTool(
+        videoComposition.animationTool = AVVideoCompositionCoreAnimationTool(
             postProcessingAsVideoLayer: videoLayer,
             in: parentLayer
         )
-        let videoComposition = AVVideoComposition(configuration: compositionConfig)
-
+//
         return (composition, videoComposition)
     }
 
@@ -252,10 +209,10 @@ final class VideoOverlayExporter: NSObject {
 
     private func buildOverlayLayers(renderSize: CGSize) -> (parent: CALayer, video: CALayer) {
         let parentLayer = CALayer()
-        let videoLayer  = CALayer()
+        let videoLayer = CALayer()
 
         parentLayer.frame = CGRect(origin: .zero, size: renderSize)
-        videoLayer.frame  = CGRect(origin: .zero, size: renderSize)
+        videoLayer.frame = CGRect(origin: .zero, size: renderSize)
 
         parentLayer.isGeometryFlipped = true
 
@@ -266,45 +223,45 @@ final class VideoOverlayExporter: NSObject {
     }
 
     private func makeTextOverlayLayer(renderSize: CGSize) -> CALayer {
-        let overlayWidth:   CGFloat = min(renderSize.width * 0.75, 420)
-        let overlayHeight:  CGFloat = 68
-        let bottomPadding:  CGFloat = 28
+        let overlayWidth: CGFloat = min(renderSize.width * 0.75, 420)
+        let overlayHeight: CGFloat = 68
+        let bottomPadding: CGFloat = 28
 
         // With isGeometryFlipped = true on parent: y=0 is visual top, y=height is visual bottom.
         let container = CALayer()
         container.frame = CGRect(
-            x:      (renderSize.width - overlayWidth) / 2,
-            y:      renderSize.height - overlayHeight - bottomPadding,
-            width:  overlayWidth,
+            x: (renderSize.width - overlayWidth) / 2,
+            y: renderSize.height - overlayHeight - bottomPadding,
+            width: overlayWidth,
             height: overlayHeight
         )
         container.backgroundColor = UIColor.black.withAlphaComponent(0.55).cgColor
-        container.cornerRadius    = 10
+        container.cornerRadius = 10
 
         let scale: CGFloat = 2.0
 
         // Title
-        let titleLayer             = CATextLayer()
-        titleLayer.string          = "Processed in background"
-        titleLayer.font            = CTFontCreateWithName("Helvetica-Bold" as CFString, 0, nil)
-        titleLayer.fontSize        = 16
+        let titleLayer = CATextLayer()
+        titleLayer.string = "Processed in background"
+        titleLayer.font = CTFontCreateWithName("Helvetica-Bold" as CFString, 0, nil)
+        titleLayer.fontSize = 16
         titleLayer.foregroundColor = UIColor.white.cgColor
-        titleLayer.alignmentMode   = .center
-        titleLayer.contentsScale   = scale
-        titleLayer.frame           = CGRect(x: 8, y: 8, width: overlayWidth - 16, height: 26)
+        titleLayer.alignmentMode = .center
+        titleLayer.contentsScale = scale
+        titleLayer.frame = CGRect(x: 8, y: 8, width: overlayWidth - 16, height: 26)
 
         // Timestamp
-        let formatter        = DateFormatter()
+        let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
 
-        let timestampLayer             = CATextLayer()
-        timestampLayer.string          = formatter.string(from: Date())
-        timestampLayer.font            = CTFontCreateWithName("Helvetica" as CFString, 0, nil)
-        timestampLayer.fontSize        = 13
+        let timestampLayer = CATextLayer()
+        timestampLayer.string = formatter.string(from: Date())
+        timestampLayer.font = CTFontCreateWithName("Helvetica" as CFString, 0, nil)
+        timestampLayer.fontSize = 13
         timestampLayer.foregroundColor = UIColor.white.withAlphaComponent(0.85).cgColor
-        timestampLayer.alignmentMode   = .center
-        timestampLayer.contentsScale   = scale
-        timestampLayer.frame           = CGRect(x: 8, y: 38, width: overlayWidth - 16, height: 22)
+        timestampLayer.alignmentMode = .center
+        timestampLayer.contentsScale = scale
+        timestampLayer.frame = CGRect(x: 8, y: 38, width: overlayWidth - 16, height: 22)
 
         container.addSublayer(titleLayer)
         container.addSublayer(timestampLayer)
@@ -320,8 +277,6 @@ final class VideoOverlayExporter: NSObject {
                 guard let self, let session else { return }
                 let percent = Int(session.progress * 100)
                 self.progressSubject.send(percent)
-                self.bgTask?.progress.completedUnitCount = Int64(percent)
-                self.bgTask?.updateTitle(self.bgTask?.title ?? "", subtitle: "Exporting \(percent)%")
             }
         }
     }

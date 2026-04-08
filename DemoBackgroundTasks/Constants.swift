@@ -7,7 +7,7 @@
 
 import Foundation
 
-final class Constants {
+enum Constants {
     static let videoFileUrl = FileManager.default
         .urls(for: .documentDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("BigBuckBunny.mp4")

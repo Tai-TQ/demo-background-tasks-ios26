@@ -6,7 +6,7 @@
 	<string>Light</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>com.vts.listimage.*</string>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER).*</string>
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>
